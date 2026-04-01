@@ -1,16 +1,27 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from db import engine, Base, get_db
-from models import User, Alert, AIInsight, InventoryItem
-from auth import get_password_hash
-from routes import auth, dashboard, alerts, ai
-import os
+from .core.config import settings
+from .core.database import engine, Base, get_db
+from .core.middleware import ErrorHandlingMiddleware, RequestLoggingMiddleware
+from .core.logging import setup_logging, get_logger
+from .models import User, Alert, AIInsight, InventoryItem
+from .auth import get_password_hash
+from .routes import auth, dashboard, alerts, ai
+
+# Setup logging
+setup_logging(settings.LOG_LEVEL)
+logger = get_logger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Application lifespan handler."""
+    logger.info("Starting PharOS API...")
+    
     # Create database tables
     Base.metadata.create_all(bind=engine)
+    logger.info("Database tables created")
     
     # Create demo user if not exists
     db = next(get_db())
@@ -25,7 +36,7 @@ async def lifespan(app: FastAPI):
             )
             db.add(demo_user)
             db.commit()
-            print("Demo user created: admin@pharos.com / admin123")
+            logger.info("Demo user created: admin@pharos.com")
         
         # Create sample alerts if none exist
         alert_count = db.query(Alert).count()
@@ -83,7 +94,7 @@ async def lifespan(app: FastAPI):
             ]
             db.add_all(sample_alerts)
             db.commit()
-            print("Sample alerts created")
+            logger.info("Sample alerts created")
         
         # Create sample inventory if none exists
         inventory_count = db.query(InventoryItem).count()
@@ -132,26 +143,33 @@ async def lifespan(app: FastAPI):
             ]
             db.add_all(sample_inventory)
             db.commit()
-            print("Sample inventory created")
+            logger.info("Sample inventory created")
             
     finally:
         db.close()
     
+    logger.info("PharOS API started successfully")
     yield
+    logger.info("Shutting down PharOS API...")
+
 
 app = FastAPI(
-    title="PharOS API",
+    title=settings.APP_NAME,
     description="AI Compliance Command Center API",
-    version="1.0.0",
+    version=settings.APP_VERSION,
     lifespan=lifespan
 )
 
-# CORS middleware
+# Add middleware (order matters - last added is first executed)
+app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(ErrorHandlingMiddleware)
+
+# CORS middleware with proper configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -161,14 +179,18 @@ app.include_router(dashboard.router)
 app.include_router(alerts.router)
 app.include_router(ai.router)
 
+
 @app.get("/")
 async def root():
+    """Root endpoint."""
     return {
         "message": "PharOS API - AI Compliance Command Center",
-        "version": "1.0.0",
+        "version": settings.APP_VERSION,
         "status": "running"
     }
 
+
 @app.get("/health")
 async def health():
+    """Health check endpoint."""
     return {"status": "healthy"}
